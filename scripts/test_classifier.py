@@ -17,8 +17,11 @@ from matplotlib import pyplot as plt
 
 
 #****************global variables******************
+
+#name of the topics to subscribe
 topics_to_subscribe = ['/aqua/state', '/aqua/imu']
 
+#message types for the topics to subscribe
 msg_types = [StateMsg, Imu]
 '''
 info_to_extract = ['/aqua/state.LegCurrents.0','/aqua/state.LegCurrents.1',
@@ -26,13 +29,19 @@ info_to_extract = ['/aqua/state.LegCurrents.0','/aqua/state.LegCurrents.1',
                    '/aqua/imu.orientation.x', '/aqua/imu.orientation.y']
 '''
 
+#the information from within the topics that are needed by the classifier
 info_to_extract = ['/aqua/imu.orientation.y']
 
+#the path to the classifier
 path_to_classifier = "/home/abhisek/Study/Robotics/AquaAutonomousEntryExit/svm_classifier_sw15.model"
+
+#load the classifier
 classifier = pickle.load(open(path_to_classifier,'rb'))
 
+#initialize the publisher
 pub_classifier = rospy.Publisher('/gait_prediction', String, queue_size =10)
 
+#dictionary containing the  
 info_container_dict = {}
 prediction_list = []
 filtered_prediction = []
@@ -47,21 +56,31 @@ median_filter_size = 1
 recreated_data = []
 #***************************************************
 
+'''
+#class that holds two things: 
+        1. the name of the topic 
+        2. the corresponding 
+#message received from the topic
+'''
 
 class InfoContainer():
-    def __init__(self, label):
+    def __init__(self, topic):
 
-        self.label = label
+        self.topic = topic
         self.data = None
 
 
 
 def callback_state(statedata):
     '''
-    the callback function
+    the callback function for the state topic
     '''
+
     global info_container_dict, sync_data
+
+    #store data received by the subscriber into the info container
     info_container_dict[topics_to_subscribe[0]].data = statedata
+
     '''
     rospy.loginfo(rospy.get_caller_id() + "I heard %s\n", imu.header)
     rospy.loginfo(rospy.get_caller_id() + "and also %s\n", state.header)
@@ -69,6 +88,10 @@ def callback_state(statedata):
     '''
 
     rospy.loginfo('Calling from state callback')
+
+    #if both the imu and state data is available synchronize the data and
+    #call the classifier for prediction
+
     if info_container_dict[topics_to_subscribe[0]].data is not None and info_container_dict[topics_to_subscribe[1]].data is not None:
         sync_data = synchronize_data(info_to_extract)
     else:
@@ -78,11 +101,17 @@ def callback_state(statedata):
 
 def callback_imu(imudata):
     '''
-    the callback function
+    the callback function for IMU data
     '''
     global info_container_dict, sync_data
+
+
     info_container_dict[topics_to_subscribe[1]].data = imudata
     rospy.loginfo("Calling from imu callback")
+
+    #if both the imu and the state data is available, synchronize the
+    # data and call the classifier for prediction
+
     if info_container_dict[topics_to_subscribe[0]].data is not None and info_container_dict[topics_to_subscribe[1]].data is not None:
         sync_data = synchronize_data(info_to_extract)
     else:
@@ -91,13 +120,30 @@ def callback_imu(imudata):
 
 def retrieve_info(msg_dict, field_to_extract):
     '''
+    Retrieve specific fields from a ros message dictionary
+    input msg_dict: Dictionary version of a ros message
+          field_to_extract : name of the field to extract
+                            e.g. : /aqua/imu.orientation.x
+
+    output : the value of the field in the message dictionary
     field_to_extract will be of the format  /msg/name.primargfield.secondaryfield.andso_on
     '''
     field_segments = field_to_extract.strip().split('.')
 
+    #check if the field to extract is a particular index from a list
+    '''
+    e.g if we need to extract the value from the second index of a list or array (list1[2]),
+    it is expressed as list1.2
+
+    '''
+
     contains_list_index = False
+    #check if last character is a digit 
+    #if true, its a index in a list
     if field_segments[-1].isdigit():
         contains_list_index =True
+
+    #the first value is the name of the topic, so that is excluded
 
     if contains_list_index:
         key_list = field_segments[1:-1]
@@ -105,6 +151,8 @@ def retrieve_info(msg_dict, field_to_extract):
         key_list = field_segments[1:]
 
     cur_dict = msg_dict
+    #checks if there are nested dictionaries and
+    #keeps going until it reaches the required value
     for key in key_list:
 
         cur_dict = cur_dict[key]
@@ -120,8 +168,14 @@ def retrieve_info(msg_dict, field_to_extract):
 
 def synchronize_data(info_to_extract):
     '''
-    synchronizes the data and collects the necessary message fields from 
-    the entire message
+    Synchronizes data currently present in the info_container_dict
+    and publishes a prediction based on the synchronized data
+
+    input: info_to_extract : list of columns to extract information from
+                            synchronizes the data and collects the necessary message fields from 
+                            the entire message
+
+    output : -
     '''
     #global state, imu 
     global start_of_feed_time
@@ -130,6 +184,7 @@ def synchronize_data(info_to_extract):
     state =  info_container_dict[topics_to_subscribe[0]].data
     imu = info_container_dict[topics_to_subscribe[1]].data
     
+    #convert message received from the subscribers into respective dictionaries
     state_dict = message_converter.convert_ros_message_to_dictionary(state)
     imu_dict = message_converter.convert_ros_message_to_dictionary(imu)
 
@@ -141,6 +196,7 @@ def synchronize_data(info_to_extract):
 
     current_time = state_dict['header']['stamp']
 
+    #get the current time wrt to the start time
     diff_sec = int(current_time['secs']) - int(start_of_feed_time['secs'])
     diff_nano_sec = int(current_time['nsecs']) - int(start_of_feed_time['nsecs'])
 
@@ -151,6 +207,7 @@ def synchronize_data(info_to_extract):
     x_axis.append(time_diff)
     data_list = []
 
+    #pick the data columns from the topics needed to make the prediction
     for info_name in info_to_extract:
 
         topic = info_name.strip().split('.')[0]
@@ -158,18 +215,22 @@ def synchronize_data(info_to_extract):
         retrieved_info = retrieve_info(info_dict, info_name)
         data_list.append(retrieved_info)
     
+    #recreated_data is there for debugging purposes
     recreated_data.append(data_list)
 
-    #print "**********************************"
-    #print "the data list retrieved :", data_list
+    #make the prediction
     prediction = classifier.predict(np.expand_dims(np.asarray(data_list), axis=0)).item()
     prediction_list.append(prediction)
+
+    #apply a median filter to the predictions to smooth out the prediction 
+    #resutls
     if len(prediction_list) >= median_filter_size:
         median_val = np.floor(np.median(np.asarray(prediction_list[-median_filter_size:])))
     else:
         median_val = np.floor(np.median(np.asarray(prediction_list)))
     filtered_prediction.append(median_val)
 
+    #publish the smoothed prediction value
     pub_classifier.publish(str(median_val))
     #rospy.loginfo("The data after synchronization :",  data_list )
 
@@ -195,7 +256,9 @@ def listener(topics_to_subscribe, msg_types):
 
 def myhook():
 
-
+    '''
+    plots the predictions made wrt time 
+    '''
     data = np.asarray(recreated_data)
     
     print "the shape of the data : ", data.shape    
